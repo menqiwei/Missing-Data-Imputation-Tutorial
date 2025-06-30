@@ -1,0 +1,827 @@
+---
+title: "Missing Data Tutorial"
+output: html_document
+date: "2025-02-26"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## VETPREV 87255 Topic 3: Missing Data Analysis Tutorial
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Install necessary packages
+install.packages(c("VIM", "naniar", "mice", "mitools", "caret", "Amelia", "mi", "data.table", "howManyImputations"))
+```
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+## Load Packages
+
+library(VIM)       # Provides tools for visualizing and imputing missing values
+                   # Includes functions like `aggr()` for missing data aggregation 
+                   # and `marginplot()` for comparing missing vs. observed values.
+
+library(naniar)    # Tidy tools for exploring, visualizing, and imputing missing data
+                   # Useful functions: `miss_var_summary()`, `vis_miss()`, and `geom_miss_point()`.
+
+library(dplyr)     # Data manipulation package (part of the tidyverse)
+                   # Commonly used for filtering, selecting, and transforming data.
+
+library(ggplot2)   # Visualization package (part of the tidyverse)
+                   # Used for creating plots, including missing data visualizations.
+                   # Functions like `geom_jitter()` and `geom_density()` help analyze imputed values.
+
+library(mice)      # Multiple Imputation by Chained Equations (MICE)
+                   # Handles missing data in mixed data types using methods like `"pmm"`, `"norm"`, `"cart"`.
+                   # Functions: `mice()`, `complete()`, `pool()`.
+
+library(mitools)   # Tools for analyzing multiply imputed datasets
+                   # Works with `mice`, `Amelia`, and other imputation methods.
+                   # Key function: `MIcombine()` for pooling results.
+
+library(Amelia)    # Multiple imputation using Bootstrap EM Algorithm
+                   # Best for normally distributed continuous data.
+                   # Function: `amelia()` for imputation.
+
+library(mi)        # Fully Bayesian Multiple Imputation package
+                   # Uses MCMC to estimate missing values with uncertainty.
+                   # Functions: `mi()`, `complete()`, `summary()`.
+
+library(data.table) # High-performance data manipulation
+                    # `rbindlist()` is used for efficiently combining imputed datasets.
+
+library(howManyImputations) # Helps determine the optimal number of imputations (`m`) needed
+```
+
+
+## STEP 1: Missing Data Summary & Visualization
+
+```{r}
+## Load Dataset
+df <- diabetes 
+#View(df)
+?diabetes
+```
+
+
+```{r}
+## Inspects First Few Rows
+head(df) # Displays first few rows of the dataset
+```
+
+
+```{r}
+## Check Structure of Dataset
+str(df) # View data types and missing values structures
+```
+```{r}
+# Convert Outcome variable from "yes"/"no" to binary numeric values (1 and 0)
+df$Outcome <- ifelse(df$Outcome == "yes", 1, 0)
+
+# Convert Outcome into a factor with explicit levels 0 and 1
+df$Outcome <- factor(df$Outcome, levels = c(0,1))
+
+# Display a frequency table of the Outcome variable
+table(df$Outcome)
+```
+
+
+
+```{r}
+## Summary Statistics
+summary(df)
+```
+
+```{r}
+## Summary of Missing Data
+miss_var_summary(df) # Count of missing values per variable
+```
+```{r}
+## Count Missing Values Per Case (Row)
+miss_case_summary(df) # Identify rows the most missing values
+```
+
+
+```{r}
+## Groups Missing Data Summary by outcome
+df %>%
+    group_by(Outcome) %>%
+    miss_var_summary()
+```
+
+
+```{r}
+## Visualizing Missing Data
+vis_miss(df) 
+```
+
+```{r}
+## Clustered Missing Data Visualization
+vis_miss(df, cluster = TRUE) # Groups missing values together for pattern recognition
+```
+```{r}
+## Bar Plot of Missing Values by Variable
+gg_miss_var(df)
+```
+
+```{r}
+## Bar Plot of Missing Values by Case
+gg_miss_case(df) # shows which rows have the most missing values
+```
+```{r}
+## Missing Data Visualization by Outcome
+gg_miss_var(df, facet = Outcome)
+```
+```{r}
+## UpSet Plot to Show Combinations of Missing Data
+gg_miss_upset(df) # UpSet plot shows the intersections of missing data between different variables, helps to identify patterns of missingness
+```
+
+
+```{r}
+## Creating a Shadow Matrix (Identifies Missing Values)
+bind_shadow(df) # Binds new variables to dataset where missing values are explicitly labeled to help analyze patterns of missingness
+```
+
+```{r}
+## Analyzing Missing Values by Group 
+df %>%
+   bind_shadow() %>%
+   group_by(Insulin_NA) %>%
+   summarize(mean = mean(BMI, na.rm = TRUE)) # Calculates mean BMI based on missingness on Insulin
+```
+
+```{r}
+## Density PLot of Glucose Levels
+ggplot(df,
+   aes(x = Glucose)) +
+   geom_density()
+```
+```{r}
+## Density Plot with Missing Data Indicators
+df %>%
+   bind_shadow() %>%
+   ggplot(aes(x = Glucose,
+   color = Insulin_NA)) +
+   geom_density()
+```
+
+```{r}
+## Density Plot with Faceted Missingness
+df %>%
+  bind_shadow() %>%
+  ggplot(aes(x = BloodPressure)) +
+  geom_density() +
+  facet_wrap(~Insulin_NA) ## Helps to compare distributions based on missingness
+```
+
+```{r}
+## Comparing BMI by Missingness of Pregnancies
+df %>%
+  bind_shadow() %>%
+  ggplot(aes(x = BMI,
+  color = Insulin_NA)) +
+  geom_density() +
+  facet_wrap(~ Pregnancies_NA)
+```
+
+```{r}
+## Scatterplot of Missing Data Patterns
+ggplot(df,
+   aes(x = Pregnancies,
+   y = SkinThickness)) +
+   geom_miss_point()
+```
+
+```{r}
+## Margin Plot to Examine Missing Data Correlation
+marginplot(df[, c("Pregnancies", "SkinThickness")])
+# Visualizes relationship between missing and observed values for two numerical variables 
+# Scatterplot of Pregnancies and SkinThickness
+# Blue points where neither variable is missing
+# Red boxplots (margins) show distirbution of each variable when the other is missing
+# Blue boxplots (margins) show distribution of each variable when both observed
+# Red points are data where. one variable is missing
+# Helps determine if one variable missingess may be associated with certain values of another variable
+```
+```{r}
+## Paralell Boxplots Showing Missing Data Pattern
+pbox(df, pos = 2) # parallel boxplot compares distribution of observed vs. missing data for each variable
+```
+
+```{r}
+## Test for Missing Completely at Random 
+mcar_test(df)
+```
+
+```{r}
+## Mean Imputation of Missing Values
+df_impute_mean <- df %>%
+  bind_shadow(only_miss = TRUE) %>%
+  impute_mean_all() %>%
+  add_label_shadow()
+df_impute_mean # View imputed dataset
+```
+
+
+
+## STEP 2: Multiple Imputation
+
+Multiple Imputation itself is not really a imputation algorithm - it is rather a concept how to impute data, while also accounting for the uncertainty that comes along with the imputation.
+
+The mice package in R stands for "Multivariate Imputation by Chained Equations". It is a widely used package for handling missing data through multiple imputation.
+
+
+# Key Features of mice Package:
+  1. Multiple Imputation: Instead of filling missing values with a single estimate (e.g., mean or median), mice creates multiple plausible datasets, incorporating uncertainty in missing values.
+  
+  2.	Chained Equations: It imputes each variable with missing values conditionally on the observed data, using a sequence of regression models.
+  
+  3.	Flexible Imputation Methods: Supports different methods for imputing different types of variables (e.g., predictive mean matching, logistic regression, Bayesian linear regression).
+  
+  4.	Pooling of Results: After running analyses on multiple imputed datasets, mice combines the results using Rubin’s rules to provide more reliable statistical inferences.
+
+
+```{r}
+## Read the Package Document
+?mice::mice
+```
+
+# MI Method 1: Hotdeck with MICE pmm
+
+Predictive Mean Matching (PMM) is one of the most popular imputation methods used in mice() for handling continuous missing data. It preserves the original distribution and avoids unrealistic values.
+
+PMM follows these steps for imputing a missing value:
+	1.	Fit a regression model using observed data to predict the missing value.
+	2.	Identify the closest donor values (observed values whose predicted values are closest to the missing value).
+	3.	Randomly select one donor value from these closest matches.
+	4.	Impute the missing value with the selected donor value.
+
+```{r}
+# Create an Example dataset with just 10 obs
+demo <- head(df,10)
+
+# Impute 5 datasets with pmm method 
+imputed_demo_pmm <- mice(demo, method = "pmm", m = 5,  seed = 123, printFlag = FALSE )
+
+# Extract the imputed datasets in long format, including the original data
+complete_demo_pmm <- mice::complete(imputed_demo_pmm, action = "long", include = TRUE)
+complete_demo_pmm
+```
+
+```{r}
+# Perform multiple imputation using Predictive Mean Matching (PMM) with Full Data
+imputed_df_pmm <- mice(
+  df,                # The dataset containing missing values
+  method = "pmm",    # Uses Predictive Mean Matching (PMM) to impute missing values
+  m = 5,             # Creates 5 imputed datasets
+  seed = 123,        # Sets a random seed for reproducibility
+  printFlag = FALSE  # Suppresses iteration messages for cleaner output
+)
+
+# Extract the imputed datasets in long format
+complete_df_pmm <- mice::complete(
+  imputed_df_pmm,    # The `mids` object containing imputed datasets
+  action = "long"    # Returns all imputations stacked in a long format
+)
+
+# Check the dimensions of the complete dataset
+dim(complete_df_pmm)  # Outputs the number of rows and columns
+```
+
+
+# MI Method 2: Bayesian Linear Regression with MICE norm
+Bayesian Linear Regression Imputation is used for normally distributed continuous data and generates missing values using a regression model with Bayesian inference. Unlike "norm.nob", "norm" includes between-imputation variance, making it more statistically valid.
+
+Bayesian Linear Regression follows these steps for imputing a missing value:
+  1.	Fits a linear regression model using observed data, where the missing variable is the dependent variable, and other variables are predictors.
+	2.	Draws regression coefficients from a Bayesian posterior distribution (instead of using only point estimates like ordinary regression).
+	3.	Predicts missing values using the regression equation.
+	4.	Adds random noise based on the residual variance to capture uncertainty.
+	5.	Repeats for each missing value and iterates over all variables.
+	
+
+# MI Method 2: Bayesian Linear Regression Imputation
+
+```{r}
+# Perform multiple imputation using Bayesian Linear Regression (norm)
+imputed_df_norm <- mice(
+  df,                 # The dataset containing missing values
+  method = "norm",    # Uses Bayesian normal linear regression for imputation
+  m = 5,              # Creates 5 imputed datasets
+  maxit = 10,         # Runs 10 iterations to ensure convergence
+  seed = 123,         # Sets a random seed for reproducibility
+  printFlag = FALSE   # Suppresses iteration messages for cleaner output
+)
+
+# Extract the imputed datasets in long format
+complete_df_norm <- mice::complete(
+  imputed_df_norm,  # The `mids` object containing imputed datasets
+  "long"            # Returns all imputations stacked in a long format
+)
+
+# Check the dimensions of the complete dataset
+dim(complete_df_norm)  # Outputs the number of rows and columns
+```
+
+
+# Mixed Methods: Customize Imputation Methods for Each Variable
+
+```{r}
+# Define custom imputation methods
+methods <- c(
+  "Pregnancies" = "pmm",   # Predictive Mean Matching (for numeric)
+  "Glucose" = "norm",      # Bayesian Linear Regression (for continuous)
+  "BloodPressure" = "pmm", # PMM (common for clinical data)
+  "SkinThickness" = "midastouch",  # Bootstrap regression
+  "Insulin" = "rf",       # PMM (as insulin is skewed)
+  "BMI" = "norm",          # Classification and Regression Trees
+  "DiabetesPedigreeFunction" = "norm.nob", 
+  "Age" = "norm",          # Bayesian Linear Regression
+  "Outcome" = ""           # No imputation (binary outcome)
+)
+
+# Perform multiple imputation using the defined methods
+imputed_df_custom <- mice(df, method = methods, m = 5, seed = 123)
+
+# View summary of imputed values
+complete_df_custom <- complete(imputed_df_custom, "long", include = TRUE)
+complete_df_custom
+```
+
+
+
+# MI Method 3: Bootstrap EM algorithm with Amelia
+
+The Bootstrap EM Algorithm is the core method used in Amelia for multiple imputation. It combines:
+	1.	Bootstrapping: A method that re-samples the dataset with replacement to estimate uncertainty.
+	2.	Expectation-Maximization (EM): A likelihood-based algorithm that estimates missing values using a two-step iterative approach (Expectation → Maximization).
+
+Bootstrap EM follows these steps for imputing a missing value:
+  1.	Bootstrap Sampling. Resamples the original dataset with replacement.
+  2.	Expectation Step (E-Step). Computes expected values for missing data given the current parameter estimates.
+	3.	Maximization Step (M-Step). Updates parameter estimates (mean, variance, correlations). Refits the model with newly imputed values.Repeats until convergence (when changes become small).
+	4.	Repeat for m Imputed Datasets
+
+```{r}
+# Read Amelia Package Document
+?amelia
+```
+
+```{r}
+# Perform multiple imputation using Amelia (Bootstrap EM Algorithm)
+set.seed(123)  # Set seed for reproducibility
+imputed_df_em <- amelia(
+  df,       # Dataset containing missing values
+  m = 5,    # Number of imputed datasets to generate
+  noms = "Outcome",  # Specify categorical variables (e.g., "Outcome" is nominal)
+  p2s = 0   # Suppresses printing of progress messages
+)
+
+# Extract the list of imputed datasets
+complete_df_em <- imputed_df_em$imputations  # Amelia stores imputations in a list
+
+# Ensure each imputed dataset is correctly formatted as a data frame
+complete_df_em <- lapply(complete_df_em, as.data.frame)
+
+# Convert the list of imputed datasets into a long-format data frame
+complete_df_em_long <- rbindlist(complete_df_em, idcol = "Imputation")
+# - `rbindlist()` efficiently combines all imputed datasets into one large dataframe
+# - The column "Imputation" indicates which imputation each row belongs to (1 to 5)
+
+# Check the dimensions of the complete dataset
+dim(complete_df_em_long)  # Outputs the number of rows and columns
+
+# Now, `complete_df_em_long` contains all imputed datasets stacked together,
+# making it easier for pooled analysis.
+```
+
+
+# MI Method 4:Fully Bayesian with mi
+
+The mi package implements Fully Bayesian Multiple Imputation, which differs from other imputation methods by using Markov Chain Monte Carlo (MCMC) to model the full posterior distribution of missing values. Unlike deterministic or semi-parametric approaches (such as PMM or EM-based methods), Fully Bayesian imputation accounts for uncertainty in both the imputation model parameters and the missing data itself, making it a more robust method, especially when data is missing not at random (MNAR). This method repeatedly samples imputations from posterior distributions, incorporating prior information, making it particularly useful for small datasets or complex missing data structures.
+
+In practice, the mi() function runs multiple MCMC chains and iteratively refines imputations over many iterations. The number of chains (n.chains) and iterations (n.iter) must be carefully chosen to ensure convergence while balancing computational cost. Since Bayesian methods explicitly model parameter uncertainty, they often require fewer imputations compared to Frequentist approaches. However, Fully Bayesian imputation can be computationally intensive and requires tuning to ensure convergence. 
+
+Fully Bayesian Multiple Imputation follows these steps for imputing a missing value:
+•	Prior Specification
+	1. Define prior distributions for model parameters (e.g., means, variances, and regression coefficients).
+	2. Priors can be non-informative (default) or informative (if domain knowledge is available).
+	
+• Markov Chain Monte Carlo (MCMC) Sampling
+	3. Assign initial guesses to missing values based on observed data.
+	4. Draw new parameter estimates (e.g., means, variances, regression coefficients) from their posterior distributions.
+	5. Use the sampled parameters to generate new plausible values for missing data.
+	6. Repeat Steps 2 & 3 for Convergence. 
+
+• Generate m Imputed Datasets
+  7. Once convergence is reached, draw m independent imputations from the posterior distribution.
+
+
+```{r}
+# Read mi Package Document
+?mi
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Run multiple imputation using Bayesian methods
+imputed_df_bayes <- mi(
+    df,             # Dataset containing missing values
+    n.chains = 3,   # Number of Markov Chain Monte Carlo (MCMC) chains for Bayesian imputation
+    n.iter = 30,    # Number of iterations per chain
+    max.minutes = 5 # Limits computation time to 5 minutes (useful for large datasets)
+  )
+
+# Convert the imputed object into a long-format dataset
+complete_df_bayes <- complete(
+  imputed_df_bayes, # The `mi` object containing multiple imputations
+  m = 5            # Extracts all 5 imputed datasets
+)
+# This converts the imputed object into a list of data frames, one for each imputation.
+
+# Combine all imputed datasets into a single long-format data frame
+complete_df_bayes_long <- rbindlist(complete_df_bayes, idcol = "Imputation")
+# - `rbindlist()` efficiently binds all imputed datasets into one large dataframe.
+# - The "Imputation" column identifies which imputation each row belongs to (1 to 5).
+# - This format is useful for pooled analysis and visualization.
+
+# Check the dimensions of the complete dataset
+dim(complete_df_bayes_long)  # Outputs the number of rows and columns
+```
+
+
+
+## STEP 3: Fit a Model Separately on Each Imputed Datase
+
+After performing multiple imputation, the next step is to fit a statistical model separately on each imputed dataset. Since multiple imputation creates several complete datasets with different plausible values for the missing data, we need to apply the same model across all these datasets to maintain consistency. This ensures that the variability introduced by imputation is accounted for in the final analysis. Typically, the with() function in mice is used to automate this process by applying a specified model—such as logistic regression or linear regression—to each imputed dataset. The result is a set of models, each corresponding to one of the imputed datasets. 
+
+## PMM
+
+```{r}
+# Apply Logistic Regression to Each Imputed Dataset `imputed_df_pmm` Using `with()`
+logit_model_pmm <- with(
+  imputed_df_pmm,  # The `mids` object containing multiple imputations from `mice()`
+  glm(
+    Outcome ~ Pregnancies + Glucose + BMI + 
+      DiabetesPedigreeFunction + Age, 
+    family = binomial  # Specifies logistic regression
+  )
+)
+
+# Print the model results for each imputed dataset
+logit_model_pmm
+```
+
+## Bayesian Linear Regression
+```{r}
+# Apply Logistic Regression to Each Imputed Dataset `imputed_df_norm` Using `with()`
+logit_model_norm <- with(
+  imputed_df_norm,  # The `mids` object containing multiple imputations from `mice()`
+  glm(
+    Outcome ~ Pregnancies + Glucose + BMI + 
+      DiabetesPedigreeFunction + Age, 
+    family = binomial  # Specifies logistic regression
+  )
+)
+
+# Print the model results for each imputed dataset
+logit_model_norm
+```
+
+
+## EM
+```{r}
+# Fit logistic regression models on each imputed dataset
+amelia_models <- lapply(
+  complete_df_em,  # A list of imputed datasets from `Amelia`
+  function(data) { # Apply the logistic regression model to each dataset
+    glm(
+      Outcome ~ Pregnancies + Glucose + BMI + 
+        DiabetesPedigreeFunction + Age, 
+      data = data,          # Use the current imputed dataset
+      family = binomial     # Specify logistic regression for a binary outcome
+    )
+  }
+)
+
+# Print the model results for each imputed dataset
+amelia_models
+```
+
+## Full Bayesian
+
+```{r}
+# Fit logistic regression models on each imputed dataset using Bayesian imputation
+
+bayes_models <- lapply(
+  complete_df_bayes,  # A list of imputed datasets generated by the `mi` package (Bayesian imputation)
+  function(data) {     # Apply the logistic regression model to each dataset
+    glm(
+      Outcome ~ Pregnancies + Glucose + BMI + 
+        DiabetesPedigreeFunction + Age, 
+      data = data,          # Use the current imputed dataset
+      family = binomial     # Specifies logistic regression for a binary outcome variable
+    )
+  }
+)
+
+# Print the model results for each imputed dataset
+bayes_models
+```
+
+## Calculate the optimal Number of Imputations
+
+The default number of imputations, controlled by the m argument in most packages, is 5. This comes from the original work back in the 80’s and 90’s from a closed form estimate of the “efficiency” of the estimate - with 25% missing data and 5 imputations, efficiency is over 95%.
+
+However, modern work has shown those results are only for the point estimates. If you similarly want your standard errors to be replicable, you need a much larger sample size. von Hippel has released an approach to estimate the required number of imputations; the number is often 100-200. R package howManyImputations can carry out the calculations. For this tutorial I will stick with 5 imputations for ease, but in practice, in absence of other information or demands, starting with 100 imputations is more realistic.
+
+Calculate the number of imputations needed to have consistent estimates of the standard error. To do so requires an estimate of the Fraction of Missing Information (FMI) which can only be obtained after running some number of imputations. Therefore, the following procedure is recommended:
+
+  1. Carry out a limited number of imputations to enable estimation of the FMI. von Hippel (2020) recommends 20 imputations.
+  2. Use the function how_many_imputations() to calculate how many total imputations you will need.
+  3. If the number of total imputations you will need is larger than your initial batch of 20, run additional imputations.
+
+```{r}
+# Estimate the required number of imputations for pmm
+how_many_imputations(logit_model_pmm)
+```
+
+```{r}
+# Estimate the required number of imputations for pmm
+how_many_imputations(logit_model_norm)
+```
+
+```{r}
+# Estimate the required number of imputations for EM
+how_many_imputations(amelia_models)
+```
+
+```{r}
+# Estimate the required number of imputations for Full Bayesian
+how_many_imputations(bayes_models)
+```
+
+The how_many_imputations() function estimates the optimal number of imputations (m) based on the fraction of missing information (FMI) in each model. Since different imputation methods handle missing data in different ways, the uncertainty they introduce varies, leading to different recommendations for m.
+
+•	Higher missinfo values → More missing data, leading to greater uncertainty in the estimate.
+•	Lower missinfo values → Less missing data impact, meaning the variable is well-estimated.
+
+ 1. PMM selects observed values rather than modeling the full distribution, leading to moderate FMI.
+
+ 2. Bayesian linear Regression assumes normality but does not fully account for outliers or skewed data, leading to higher FMI.
+
+ 3. EM uses likelihood-based estimation, which reduces FMI compared to regression-based approaches.
+
+ 4. Bayesian imputation models the entire posterior distribution, reducing uncertainty and requiring fewer imputations.
+
+
+
+## STEP 4: Pool the Results
+
+Once the logistic regression models have been fitted separately on each imputed dataset, the next step is to combine (pool) the results to obtain a single set of estimates. The pooling process averages the regression coefficients across all imputed datasets while adjusting the standard errors to reflect the uncertainty introduced by missing data. 
+
+In mice, the pool() function is used to pool results from models fitted on imputed datasets. However, when using imputed data from Amelia or mi, we use MIcombine() from the mitools package to perform the same task. MIcombine() takes a list of models (one per imputation) and combines the estimates using Rubin’s rules, which properly adjust for between-imputation variability. The final pooled model can then be interpreted just like any standard regression output, but with the added confidence that missing data uncertainty has been accounted for in the estimates.
+
+## PMM
+```{r}
+# Pool the results from the logistic regression models across all imputed datasets
+pooled_results_pmm <- mice::pool(logit_model_pmm)
+
+# Explanation:
+# - `pool()` combines the estimates from multiple imputed datasets into a single set of results.
+# - It follows **Rubin’s rules** to compute pooled estimates, adjusting for:
+#   1. **Within-imputation variance** (variance within each imputed dataset).
+#   2. **Between-imputation variance** (differences in estimates across imputations).
+#   This ensures that standard errors, confidence intervals, and p-values correctly 
+#   account for missing data uncertainty.
+
+# Display the summary of the pooled regression results
+summary(pooled_results_pmm)
+
+# Explanation:
+# - `summary(pooled_results)` provides the final **pooled regression coefficients**, 
+#   along with their **standard errors, t-values, and p-values**.
+# - These estimates reflect the combined influence of multiple imputations.
+# - The results can now be interpreted just like a standard logistic regression model, 
+#   but with adjustments for missing data.
+```
+```{r}
+## Pool results with MIcombine()
+# Extract fitted models from 'with()' output
+model_list_pmm <- logit_model_pmm$analyses  
+
+# Combine Results from Imputed Models
+pooled_results_pmm2 <- MIcombine(model_list_pmm)
+
+# View Summary of Pooled Results
+summary(pooled_results_pmm2)
+```
+
+
+## Bayesian Linear Regression
+```{r}
+summary(mice::pool(logit_model_norm))
+```
+
+## EM
+```{r}
+## Pool results with MIcombine()
+# Extract fitted models from 'with()' output
+model_list_em <- amelia_models
+
+# Combine Results from Imputed Models
+pooled_results_em <- MIcombine(model_list_em)
+
+# View Summary of Pooled Results
+summary(pooled_results_em)
+```
+
+## Full Bayesian
+```{r}
+# Extract fitted models from 'with()' output
+model_list_bayes <- bayes_models
+
+# Combine Results from Imputed Models
+pooled_results_bayes <- MIcombine(model_list_bayes)
+
+# View Summary of Pooled Results
+summary(pooled_results_bayes)
+```
+
+
+## STEP 5: Evaluation
+
+Approach 1: Compare Imputed vs. Observed Data (Distributional Check)
+
+	•	Imputed values should have a similar distribution to observed values.
+	
+	•	If imputed values deviate significantly, the method might be introducing bias.
+	
+
+```{r}
+# Create a binary indicator for observed (non-missing) SkinThickness values
+complete_df_pmm$SkinThickness_Observed <- cci(df$SkinThickness)
+# `cci()` generates a 0/1 indicator:
+# - 1 if the value is observed (not missing)
+# - 0 if the value was originally missing
+
+# Plot imputed vs. observed values of SkinThickness across imputations
+ggplot(complete_df_pmm, aes(x = .imp, y = SkinThickness, color = SkinThickness_Observed)) +
+  geom_jitter(
+    size = 0.5,   # Makes points smaller for better visibility
+    alpha = 0.6,  # Adds transparency to reduce overlap
+    width = 0.2   # Spreads points horizontally to avoid overplotting
+  ) +
+  labs(
+    title = "Imputed vs. Observed SkinThickness Values",
+    x = "Imputation Number (.imp)",
+    y = "SkinThickness",
+    color = "Observed?"
+  ) +
+  theme_minimal()  # Uses a clean, minimal theme for better readability
+```
+
+```{r, warning=FALSE}
+# Compare distributions of imputed vs. observed values
+ggplot() +
+  # Density plot for observed data (original dataset)
+  geom_density(data = df, aes(x = Insulin, color = "Observed Data"), size = 1) +
+  
+  # Density plot for PMM imputed data
+  geom_density(data = complete_df_pmm, aes(x = Insulin, color = "PMM"), size = 1) +
+  
+  # Density plot for Bayesian linear regression (norm) imputed data
+  geom_density(data = complete_df_norm, aes(x = Insulin, color = "Norm"), size = 1) +
+  
+  # Density plot for EM-based imputation (Amelia)
+  geom_density(data = complete_df_em_long, aes(x = Insulin, color = "EM (Amelia)"), size = 1) +
+  
+  # Density plot for Bayesian multiple imputation (mi package)
+  geom_density(data = complete_df_bayes_long, aes(x = Insulin, color = "Bayesian (mi)"), size = 1) +
+  
+  # Add title and axis labels
+  labs(
+    title = "Comparing Imputation Methods: PMM vs. Norm vs. EM vs. Bayesian",
+    x = "Insulin Level",
+    y = "Density",
+    color = "Dataset"
+  ) +
+  
+  # Add a clean minimal theme
+  theme_minimal()
+```
+
+Approach 2:Comparing Pooled vs. Complete-Case Analysis Coefficients
+
+	•	If imputed data significantly changes the model results compared to complete-case analysis, it may indicate bias.
+
+
+```{r}
+# Baseline Model 1: Complete Case Analysis (Listwise Deletion)
+model_cc <- glm(Outcome ~ Pregnancies + Glucose + BMI + DiabetesPedigreeFunction + Age,
+                data = df[complete.cases(df), ], family = binomial)
+
+# Baseline Model 2: Mean Imputation
+model_mean <- glm(Outcome ~ Pregnancies + Glucose + BMI + DiabetesPedigreeFunction + Age,
+                  data = df_impute_mean, family = binomial) 
+```
+
+```{r}
+# Results from complete data
+cc_coefficients <- as.data.frame(coef(summary(model_cc)))
+print(cc_coefficients)
+```
+
+
+```{r}
+# Results from mean imputation
+mean_coefficients <- as.data.frame(coef(summary(model_mean)))
+print(mean_coefficients)
+```
+
+
+```{r}
+# Fit logistic regression models
+model_pmm <- glm(Outcome ~ Pregnancies + Glucose + BMI + DiabetesPedigreeFunction + Age,
+                 data = complete_df_pmm, family = binomial)
+model_norm <- glm(Outcome ~ Pregnancies + Glucose + BMI + DiabetesPedigreeFunction + Age,
+                 data = complete_df_norm, family = binomial)
+model_em <- glm(Outcome ~ Pregnancies + Glucose + BMI + DiabetesPedigreeFunction + Age,
+                 data = complete_df_em_long, family = binomial)
+model_bayes <- glm(Outcome ~ Pregnancies + Glucose + BMI + DiabetesPedigreeFunction + Age,
+                 data = complete_df_bayes_long, family = binomial)
+
+# Make predictions
+pred_pmm <- predict(model_pmm, type = "response")
+pred_norm <- predict(model_norm, type = "response")
+pred_em <- predict(model_em, type = "response")
+pred_bayes <- predict(model_bayes, type = "response")
+
+# Convert probabilities to binary outcomes
+pred_pmm_class <- ifelse(pred_pmm > 0.5, 1, 0)
+pred_norm_class <- ifelse(pred_norm > 0.5, 1, 0)
+pred_em_class <- ifelse(pred_em > 0.5, 1, 0)
+pred_bayes_class <- ifelse(pred_bayes > 0.5, 1, 0)
+
+# Compute Confusion Matrix
+conf_pmm <- confusionMatrix(as.factor(pred_pmm_class), complete_df_pmm$Outcome)
+conf_norm <- confusionMatrix(as.factor(pred_norm_class), complete_df_norm$Outcome)
+conf_em <- confusionMatrix(as.factor(pred_em_class), complete_df_em_long$Outcome)
+conf_bayes <- confusionMatrix(as.factor(pred_bayes_class), complete_df_bayes_long$Outcome)
+                             
+# Compare accuracy
+conf_pmm$overall["Accuracy"]
+conf_norm$overall["Accuracy"]
+conf_em$overall["Accuracy"]
+conf_bayes$overall["Accuracy"]
+```
+
+
+```{r}
+# Compare Sensitivity
+conf_pmm$byClass["Sensitivity"]
+conf_norm$byClass["Sensitivity"]
+conf_em$byClass["Sensitivity"]
+conf_bayes$byClass["Sensitivity"]
+```
+
+
+
+```{r}
+library(pROC)
+roc_pmm <- roc(complete_df_pmm$Outcome, pred_pmm)
+roc_norm <- roc(complete_df_norm$Outcome, pred_norm)
+roc_em <- roc(complete_df_pmm$Outcome, pred_em)
+roc_bayes <- roc(complete_df_norm$Outcome, pred_bayes)
+```
+```{r}
+# Compute AUC Values
+auc_pmm <- auc(roc_pmm)
+auc_norm <- auc(roc_norm)
+auc_em <- auc(roc_em)
+auc_bayes <- auc(roc_bayes)
+```
+```{r}
+# Print AUC results
+print(paste("AUC - PMM:", auc_pmm))
+print(paste("AUC - Norm:", auc_norm))
+print(paste("AUC - EM:", auc_em))
+print(paste("AUC - Bayesian:", auc_bayes))
+```
+
+```{r}
+ggplot() +
+  geom_line(aes(x = roc_pmm$specificities, y = roc_pmm$sensitivities, color = "PMM")) +
+  geom_line(aes(x = roc_norm$specificities, y = roc_norm$sensitivities, color = "Norm")) +
+  geom_line(aes(x = roc_em$specificities, y = roc_em$sensitivities, color = "EM")) +
+  geom_line(aes(x = roc_bayes$specificities, y = roc_bayes$sensitivities, color = "Bayesian")) +
+  labs(title = "ROC Curves for Different Imputation Methods",
+       x = "1 - Specificity",
+       y = "Sensitivity",
+       color = "Method") +
+  theme_minimal()
+```
+
+
+
